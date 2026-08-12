@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+#
+# Copyright 2026 The Sigstore Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Step 1: create the Azure infrastructure and build the server binary.
+
+set -euo pipefail
+# shellcheck source=demo-env.sh
+source "$(dirname "${BASH_SOURCE[0]}")/demo-env.sh"
+
+command -v az >/dev/null || fail "the Azure CLI (az) is required: https://learn.microsoft.com/cli/azure/install-azure-cli"
+az account show >/dev/null 2>&1 || fail "not logged in to Azure; run 'az login' first"
+
+info "Using subscription: $(az account show --query name -o tsv)"
+note "resource group: ${RESOURCE_GROUP}"
+note "vault:          ${VAULT_NAME}"
+note "key:            ${KEY_NAME}"
+
+info "Creating resource group"
+az group create -n "${RESOURCE_GROUP}" -l "${LOCATION}" -o none
+
+info "Creating Key Vault (RBAC authorization)"
+# --enable-rbac-authorization uses Azure RBAC rather than legacy access policies,
+# which is what the "Key Vault Crypto User" role assignment below relies on.
+az keyvault create \
+  -n "${VAULT_NAME}" \
+  -g "${RESOURCE_GROUP}" \
+  -l "${LOCATION}" \
+  --enable-rbac-authorization true \
+  -o none
+
+info "Granting this identity the Key Vault roles it needs"
+# Two roles, on purpose:
+#   Key Vault Crypto Officer -- lets THIS script create and download the key.
+#   Key Vault Crypto User    -- read the public key and sign. This is the only
+#                               role a production rekor identity needs; Officer
+#                               is a setup-time convenience for the demo.
+# Works for a user account; falls back to the service principal when running
+# as one (for example in CI).
+PRINCIPAL_ID="$(az ad signed-in-user show --query id -o tsv 2>/dev/null || true)"
+if [[ -z "${PRINCIPAL_ID}" ]]; then
+  PRINCIPAL_ID="$(az account show --query user.name -o tsv)"
+fi
+VAULT_SCOPE="$(az keyvault show -n "${VAULT_NAME}" --query id -o tsv)"
+for role in "Key Vault Crypto Officer" "Key Vault Crypto User"; do
+  note "assigning: ${role}"
+  az role assignment create \
+    --role "${role}" \
+    --assignee "${PRINCIPAL_ID}" \
+    --scope "${VAULT_SCOPE}" \
+    -o none
+done
+
+note "RBAC changes take up to a minute to propagate; waiting before using the vault."
+sleep 45
+
+info "Creating the checkpoint signing key (EC P-256)"
+# Azure Key Vault offers EC and RSA keys, but NOT Ed25519. That's fine for
+# checkpoint signing, but it does mean this log cannot be witnessed --
+# Ed25519 is the only key type compatible with witnessing. See
+# pkg/note/note.go and the README section on this backend.
+az keyvault key create \
+  --vault-name "${VAULT_NAME}" \
+  -n "${KEY_NAME}" \
+  --kty EC \
+  --curve P-256 \
+  --ops sign verify \
+  -o none
+
+info "Downloading the public key for independent verification"
+rm -f "${PUBKEY_PEM}"
+az keyvault key download \
+  --vault-name "${VAULT_NAME}" \
+  -n "${KEY_NAME}" \
+  -e PEM \
+  -f "${PUBKEY_PEM}"
+note "wrote ${PUBKEY_PEM}"
+
+info "Building rekor-server-posix-azurekms"
+make -C "${REPO_ROOT}" rekor-server-posix-azurekms
+
+info "Setup complete"
+note "Key URI: ${KMS_KEY_URI}"
+note "Next:    ./02-run-server.sh"
