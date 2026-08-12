@@ -75,6 +75,18 @@ A specific key version may be pinned by appending it:
 
 `--signer-kmskey` and `--signer-filepath` are mutually exclusive; exactly one must be set.
 
+To confirm the key is wired up correctly, check that the server logs `Loaded signing key`
+with a base64 DER public key matching
+`az keyvault key show --vault-name [VAULT_NAME] -n [KEY_NAME]`, then fetch a signed
+checkpoint, whose signature is produced by Key Vault:
+
+```shell
+curl -s http://localhost:3000/api/v2/checkpoint
+```
+
+Reading the public key and signing are separate Key Vault permissions, so a missing role
+assignment can surface at either step.
+
 There is deliberately no hash algorithm flag. Azure Key Vault determines the digest
 (SHA-256, SHA-384, or SHA-512) from the algorithm of the key itself, so a flag would have
 no effect. Tink is not supported for Azure, as there is no Tink Azure Key Vault
@@ -89,6 +101,21 @@ variables:
 * `AZURE_TENANT_ID`
 * `AZURE_CLIENT_ID`
 * `AZURE_CLIENT_SECRET`
+
+#### Supported key types, and witnessing
+
+Azure Key Vault supports EC (P-256, P-384, P-521, P-256K) and RSA keys. It does not offer
+Ed25519, and Ed25519 is the only key type compatible with witnessing, so a log whose
+checkpoints are signed by a Key Vault key cannot be witnessed. Don't pass
+`--witness-policy-path` when signing with `--signer-kmskey`.
+
+If you need witnessing, sign with an Ed25519 key file via `--signer-filepath` instead.
+This constraint is a property of the signed-note format rather than of this binary, and
+applies equally to the gcp and aws backends when signing with a KMS key.
+
+Note that `--identity-mode` is unaffected: it constrains the algorithms accepted for
+*client entries*, not the checkpoint signing key, so it can be combined with Key Vault
+signing.
 
 ### GCP CloudSQL + Cloud Storage
 
