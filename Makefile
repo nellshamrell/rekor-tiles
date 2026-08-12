@@ -15,7 +15,7 @@
 
 .PHONY: all test clean lint gosec ko-local tools ldflags
 
-all: protos rekor-server-gcp rekor-server-posix rekor-server-aws rekor-server-gcpcloudsql
+all: protos rekor-server-gcp rekor-server-posix rekor-server-posix-azurekms rekor-server-aws rekor-server-gcpcloudsql
 
 GIT_VERSION ?= $(shell git describe --tags --always --dirty)
 GIT_HASH ?= $(shell git rev-parse HEAD)
@@ -80,6 +80,9 @@ rekor-server-gcp: $(SRC) $(PROTO_SRC)
 
 rekor-server-posix: $(SRC) $(PROTO_SRC)
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(SERVER_LDFLAGS)" -o rekor-server-posix ./cmd/rekor-server/posix
+
+rekor-server-posix-azurekms: $(SRC) $(PROTO_SRC)
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(SERVER_LDFLAGS)" -o rekor-server-posix-azurekms ./cmd/rekor-server/posix-azurekms
 
 rekor-server-aws: $(SRC) $(PROTO_SRC)
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(SERVER_LDFLAGS)" -o rekor-server-aws ./cmd/rekor-server/aws

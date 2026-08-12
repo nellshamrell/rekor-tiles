@@ -17,6 +17,7 @@ Rekor v2 supports multiple storage backends. Separate binaries for each backend 
 * `rekor-server-gcp`: GCP-specific binary (includes only Google Cloud dependencies)
 * `rekor-server-aws`: AWS-specific binary (includes only AWS dependencies)
 * `rekor-server-posix`: POSIX-based storage (lightweight, no cloud dependencies)
+* `rekor-server-posix-azurekms`: POSIX-based storage with Azure Key Vault checkpoint signing
 * `rekor-server-gcpcloudsql`: Alternative to GCP binary that uses CloudSQL instead of Spanner
 
 ### Google Cloud Platform (GCP)
@@ -42,6 +43,52 @@ Rekor v2 supports multiple storage backends. Separate binaries for each backend 
 * Sequencing: Atomic POSIX operations
 * Tile storage: POSIX-compliant filesystem
 * Use case: Lower cost, easy to serve
+
+### POSIX + Azure Key Vault
+
+* Binary: `rekor-server-posix-azurekms`
+* Container `rekor-tiles/posix-azurekms`
+* Sequencing: Atomic POSIX operations
+* Tile storage: POSIX-compliant filesystem
+* Checkpoint signing: Azure Key Vault, or a private key file
+* Use case: POSIX storage where the checkpoint signing key should stay in Azure Key Vault
+
+This is the same storage backend as `rekor-server-posix` and is configured identically,
+including `--storage-dir`. It is shipped as a separate binary so that `rekor-server-posix`
+stays free of cloud SDK dependencies.
+
+Note that there is no Azure *storage* driver — Tessera provides drivers for GCS, S3,
+MySQL, and POSIX only, so tiles are still written to a filesystem (for example an Azure
+Files share mounted on the server).
+
+To sign checkpoints with a Key Vault key, pass its URI:
+
+```shell
+rekor-server-posix-azurekms serve \
+  --storage-dir=/var/lib/rekor \
+  --hostname=rekor.example.com \
+  --signer-kmskey=azurekms://[VAULT_NAME].vault.azure.net/[KEY_NAME]
+```
+
+A specific key version may be pinned by appending it:
+`azurekms://[VAULT_NAME].vault.azure.net/[KEY_NAME]/[KEY_VERSION]`.
+
+`--signer-kmskey` and `--signer-filepath` are mutually exclusive; exactly one must be set.
+
+There is deliberately no hash algorithm flag. Azure Key Vault determines the digest
+(SHA-256, SHA-384, or SHA-512) from the algorithm of the key itself, so a flag would have
+no effect. Tink is not supported for Azure, as there is no Tink Azure Key Vault
+integration.
+
+The identity used by the server needs the **Key Vault Crypto User** role on the key or
+vault, which grants the `sign` and `get` permissions required to sign checkpoints and read
+the public key. Authentication uses `DefaultAzureCredential`, so any of the standard
+mechanisms work, including a managed identity when running on Azure, or these environment
+variables:
+
+* `AZURE_TENANT_ID`
+* `AZURE_CLIENT_ID`
+* `AZURE_CLIENT_SECRET`
 
 ### GCP CloudSQL + Cloud Storage
 
