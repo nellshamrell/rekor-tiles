@@ -34,12 +34,18 @@ az group create -n "${RESOURCE_GROUP}" -l "${LOCATION}" -o none
 info "Creating Key Vault (RBAC authorization)"
 # --enable-rbac-authorization uses Azure RBAC rather than legacy access policies,
 # which is what the "Key Vault Crypto User" role assignment below relies on.
-az keyvault create \
-  -n "${VAULT_NAME}" \
-  -g "${RESOURCE_GROUP}" \
-  -l "${LOCATION}" \
-  --enable-rbac-authorization true \
-  -o none
+# Skipped when the vault already exists, so this script can be re-run after an
+# interruption without starting over.
+if az keyvault show -n "${VAULT_NAME}" -g "${RESOURCE_GROUP}" -o none 2>/dev/null; then
+  note "${VAULT_NAME} already exists, reusing it"
+else
+  az keyvault create \
+    -n "${VAULT_NAME}" \
+    -g "${RESOURCE_GROUP}" \
+    -l "${LOCATION}" \
+    --enable-rbac-authorization true \
+    -o none
+fi
 
 info "Granting this identity the Key Vault roles it needs"
 # Two roles, on purpose:
@@ -54,30 +60,47 @@ if [[ -z "${PRINCIPAL_ID}" ]]; then
   PRINCIPAL_ID="$(az account show --query user.name -o tsv)"
 fi
 VAULT_SCOPE="$(az keyvault show -n "${VAULT_NAME}" --query id -o tsv)"
+ROLES_ADDED=0
 for role in "Key Vault Crypto Officer" "Key Vault Crypto User"; do
+  if [[ -n "$(az role assignment list --assignee "${PRINCIPAL_ID}" --scope "${VAULT_SCOPE}" \
+      --role "${role}" --query "[0].id" -o tsv 2>/dev/null)" ]]; then
+    note "already assigned: ${role}"
+    continue
+  fi
   note "assigning: ${role}"
   az role assignment create \
     --role "${role}" \
     --assignee "${PRINCIPAL_ID}" \
     --scope "${VAULT_SCOPE}" \
     -o none
+  ROLES_ADDED=1
 done
 
-note "RBAC changes take up to a minute to propagate; waiting before using the vault."
-sleep 45
+# Only wait when something actually changed.
+if [[ "${ROLES_ADDED}" == "1" ]]; then
+  note "RBAC changes take up to a minute to propagate; waiting before using the vault."
+  sleep 45
+fi
 
 info "Creating the checkpoint signing key (EC P-256)"
 # Azure Key Vault offers EC and RSA keys, but NOT Ed25519. That's fine for
 # checkpoint signing, but it does mean this log cannot be witnessed --
 # Ed25519 is the only key type compatible with witnessing. See
 # pkg/note/note.go and the README section on this backend.
-az keyvault key create \
-  --vault-name "${VAULT_NAME}" \
-  -n "${KEY_NAME}" \
-  --kty EC \
-  --curve P-256 \
-  --ops sign verify \
-  -o none
+#
+# Reused if it already exists: creating again would mint a new key version and
+# invalidate the public key downloaded by an earlier run.
+if az keyvault key show --vault-name "${VAULT_NAME}" -n "${KEY_NAME}" -o none 2>/dev/null; then
+  note "${KEY_NAME} already exists, reusing it"
+else
+  az keyvault key create \
+    --vault-name "${VAULT_NAME}" \
+    -n "${KEY_NAME}" \
+    --kty EC \
+    --curve P-256 \
+    --ops sign verify \
+    -o none
+fi
 
 info "Downloading the public key for independent verification"
 rm -f "${PUBKEY_PEM}"

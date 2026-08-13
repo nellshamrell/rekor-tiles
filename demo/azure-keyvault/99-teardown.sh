@@ -20,14 +20,26 @@ set -euo pipefail
 # shellcheck source=demo-env.sh
 source "$(dirname "${BASH_SOURCE[0]}")/demo-env.sh"
 
-info "Deleting resource group ${RESOURCE_GROUP}"
-note "This removes the vault and the key. Runs in the background; it takes a few minutes."
-az group delete -n "${RESOURCE_GROUP}" --yes --no-wait -o none || true
+# Delete the vault first and wait for it. `az group delete --no-wait` would
+# return before the vault is gone, and the purge below would then have nothing
+# to purge -- leaving a soft-deleted vault holding the name.
+info "Deleting the Key Vault"
+if az keyvault show -n "${VAULT_NAME}" -o none 2>/dev/null; then
+  az keyvault delete -n "${VAULT_NAME}" -g "${RESOURCE_GROUP}" -o none
+  note "deleted (soft-delete keeps it recoverable for 90 days)"
+else
+  note "${VAULT_NAME} not found, skipping"
+fi
 
-# A soft-deleted vault keeps the name reserved, so purge it to allow reuse.
+# A soft-deleted vault keeps the name reserved and still bills nothing, but
+# purging keeps the subscription tidy and frees the name.
 info "Purging the soft-deleted vault"
-az keyvault purge -n "${VAULT_NAME}" --no-wait -o none 2>/dev/null || \
+az keyvault purge -n "${VAULT_NAME}" -o none 2>/dev/null || \
   note "nothing to purge (or purge protection is enabled)"
+
+info "Deleting resource group ${RESOURCE_GROUP}"
+note "Runs in the background; it takes a few minutes."
+az group delete -n "${RESOURCE_GROUP}" --yes --no-wait -o none || true
 
 info "Removing local demo state"
 rm -rf "${STORAGE_DIR}" /tmp/rekor-azure-demo

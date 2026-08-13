@@ -25,6 +25,11 @@ Azure cost is negligible: one standard-tier vault and one key, deleted at the en
 | Key | `rekor-checkpoint-key` | EC P-256, `sign`/`verify` |
 | Role assignments | Crypto Officer + Crypto User | Officer to create the key; User is all rekor needs |
 
+The scripts are re-runnable: `01-setup-azure.sh` reuses an existing vault, key, and
+role assignments, so an interrupted setup can simply be run again. `03-demo.sh` can be
+run repeatedly against a running server — each run submits a fresh entry and the tree
+grows by one.
+
 Local state lives in `/tmp/rekor-azure-demo/` and in two dotfiles beside these scripts
 (`.demo-env` caches the random vault suffix, `.demo-pubkey.pem` is the exported public
 key). All of it is removed by the teardown script.
@@ -132,3 +137,5 @@ verification fails if they differ.
 | `no checkpoint at http://localhost:8000` | The static file server isn't running; start `02-run-server.sh` |
 | Checkpoint verification fails | `--origin` doesn't match the server's `--hostname` |
 | `409 Conflict` on submit | The entry already exists; the client generates a unique artifact per run |
+| `does not exist in MSAL token cache` | `az account show` can succeed from cached config with no live token — run `az login` |
+| On WSL, `az` resolves to `/mnt/c/...` | That's the Windows CLI; install the Linux one (`curl -sL https://aka.ms/InstallAzureCLIDeb \| sudo bash`) so it can write PEMs to Linux paths |

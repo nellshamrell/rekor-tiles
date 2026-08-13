@@ -61,7 +61,7 @@ info "3. The key really is the one in Key Vault"
 ################################################################################
 note "Public key as Azure reports it:"
 az keyvault key show --vault-name "${VAULT_NAME}" -n "${KEY_NAME}" \
-  --query 'key.{kty:kty, crv:crv, keyOps:key_ops}' -o json | sed 's/^/    /'
+  --query 'key.{kty:kty, crv:crv, keyOps:keyOps}' -o json | sed 's/^/    /'
 echo
 note "Public key downloaded from Key Vault, which the server logged at startup"
 note "as 'Loaded signing key':"
