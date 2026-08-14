@@ -58,8 +58,19 @@ including `--storage-dir`. It is shipped as a separate binary so that `rekor-ser
 stays free of cloud SDK dependencies.
 
 Note that there is no Azure *storage* driver — Tessera provides drivers for GCS, S3,
-MySQL, and POSIX only, so tiles are still written to a filesystem (for example an Azure
-Files share mounted on the server).
+MySQL, and POSIX only, so tiles are still written to a filesystem.
+
+That filesystem must be genuinely POSIX-compliant. The driver relies on hard links,
+rename over an existing file, directory `fsync`, and `fcntl` record locks, so an ext4 or
+XFS volume on an Azure managed disk is suitable, while Azure Files over SMB (no hard
+links) and blobfuse2 (no hard links, no atomic rename) are not. Those fail during a
+write rather than at mount time. `demo/azure-blob-publish/fscheck` probes a candidate
+directory for each of these guarantees.
+
+Since the POSIX driver writes tiles but does not serve them, a separate static file
+server publishes them. `demo/azure-blob-publish` is a runnable example of the resulting
+deployment: the log on a POSIX filesystem, checkpoints signed by Key Vault, and tiles
+mirrored to Azure Blob Storage for clients to read.
 
 To sign checkpoints with a Key Vault key, pass its URI:
 

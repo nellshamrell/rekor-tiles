@@ -1,0 +1,81 @@
+#cloud-config
+#
+# Copyright 2026 The Sigstore Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Provisions the disk-backed half of the deployment: an ext4 filesystem on an
+# Azure managed disk, mounted where the rekor server will keep the log.
+#
+# Substitute STORAGE_ACCOUNT and the two rekor flags before use. See
+# ../README.md for the az commands that create the VM, attach the disk, and
+# assign the managed identity its roles.
+#
+# NOT exercised by the demo scripts. The demo runs the same binary against a
+# local filesystem; this file is the deployment those scripts model.
+#
+# This handles the disk and starts the units. It does NOT deliver the binary or
+# the unit files themselves -- bake those into the image, or have your config
+# management drop them at:
+#
+#   /usr/local/bin/rekor-server-posix-azurekms
+#   /usr/local/bin/rekor-publish.sh          (mode 0755)
+#   /etc/systemd/system/rekor-server.service
+#   /etc/systemd/system/rekor-publish.service
+#   /etc/systemd/system/rekor-publish.timer
+
+package_update: true
+packages:
+  - parted
+
+write_files:
+  # The managed disk. lun0 assumes it is the first data disk attached to the VM
+  # (`az vm disk attach --lun 0`). The symlink under /dev/disk/azure is stable
+  # across reboots in a way that /dev/sdc is not.
+  - path: /etc/systemd/system/var-lib-rekor.mount
+    content: |
+      [Unit]
+      Description=Rekor log storage
+      Before=rekor-server.service
+
+      [Mount]
+      What=/dev/disk/azure/scsi1/lun0-part1
+      Where=/var/lib/rekor
+      Type=ext4
+      # nofail keeps a bad disk from wedging the boot; the server unit requires
+      # the mount anyway, so it will not start on top of an empty root volume.
+      Options=defaults,noatime,nofail
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # The publisher shells out to the Azure CLI, which is not in the distro repos.
+  - curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+  # Partition and format only if the disk has no filesystem yet: this must be
+  # safe to re-run, because cloud-init runs again if the VM is reimaged and
+  # reformatting would destroy the log.
+  - |
+    set -euo pipefail
+    disk=/dev/disk/azure/scsi1/lun0
+    if ! blkid "${disk}-part1" >/dev/null 2>&1; then
+      parted -s "$disk" mklabel gpt mkpart primary ext4 0% 100%
+      udevadm settle
+      mkfs.ext4 -F -L rekor "${disk}-part1"
+    fi
+  - useradd --system --home-dir /var/lib/rekor --shell /usr/sbin/nologin rekor || true
+  - systemctl daemon-reload
+  - systemctl enable --now var-lib-rekor.mount
+  - install -d -o rekor -g rekor -m 0755 /var/lib/rekor/log
+  - systemctl enable --now rekor-server.service
+  - systemctl enable --now rekor-publish.timer

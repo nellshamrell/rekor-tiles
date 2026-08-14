@@ -7,6 +7,10 @@ storage driver.
 The point of the demo is that **storage and signing are orthogonal**. The private key
 never leaves the vault; the tiles are ordinary files on disk.
 
+For the other half — getting those files to clients via Azure Blob Storage, and what the
+filesystem under `--storage-dir` has to guarantee — see
+[`../azure-blob-publish`](../azure-blob-publish).
+
 ## Prerequisites
 
 - An Azure subscription and the Azure CLI (`az login` completed)

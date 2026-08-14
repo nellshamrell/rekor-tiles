@@ -1,0 +1,48 @@
+#
+# Copyright 2026 The Sigstore Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# One publish cycle. Install as /etc/systemd/system/rekor-publish.service.
+# Triggered by rekor-publish.timer, not enabled directly.
+
+[Unit]
+Description=Publish the rekor log to Azure Blob Storage
+Requires=var-lib-rekor.mount
+After=var-lib-rekor.mount network-online.target
+
+[Service]
+# Type=oneshot plus a timer means cycles cannot overlap: systemd will not start
+# another while this one is running. Two concurrent publishers could interleave
+# their phases and put a checkpoint on the read path ahead of its tiles, which
+# is the one failure this design exists to prevent.
+Type=oneshot
+User=rekor
+Group=rekor
+
+Environment=REKOR_STORAGE_DIR=/var/lib/rekor/log
+Environment=REKOR_STORAGE_ACCOUNT=STORAGE_ACCOUNT_NAME
+# The Azure CLI needs a writable home for its token cache and config.
+Environment=AZURE_CONFIG_DIR=/var/lib/rekor/.azure
+
+# Authenticate as the VM's system-assigned managed identity, which holds
+# Storage Blob Data Contributor on the account. No credential on disk. The
+# token is cached, so this is a no-op on most cycles.
+ExecStartPre=/usr/bin/az login --identity --output none
+ExecStart=/usr/local/bin/rekor-publish.sh
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/rekor

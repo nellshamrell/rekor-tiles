@@ -1,0 +1,57 @@
+#
+# Copyright 2026 The Sigstore Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The single writer. Install as /etc/systemd/system/rekor-server.service.
+#
+# There must only ever be one of these per disk. The POSIX driver's advisory
+# locks coordinate multiple frontends on a genuinely shared POSIX filesystem;
+# an Azure managed disk is not one, and attaching it to two VMs corrupts it.
+
+[Unit]
+Description=rekor-tiles server (POSIX storage, Azure Key Vault signing)
+# Refusing to start without the log volume is deliberate: starting anyway would
+# silently begin a brand new, empty log on the root filesystem.
+Requires=var-lib-rekor.mount
+After=var-lib-rekor.mount network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=rekor
+Group=rekor
+
+# No credentials on disk. DefaultAzureCredential picks up the VM's
+# system-assigned managed identity, which holds Key Vault Crypto User on the
+# signing key. Substitute the vault and key names.
+ExecStart=/usr/local/bin/rekor-server-posix-azurekms serve \
+  --storage-dir=/var/lib/rekor/log \
+  --hostname=rekor.example.com \
+  --signer-kmskey=azurekms://VAULT_NAME.vault.azure.net/KEY_NAME \
+  --checkpoint-interval=30s \
+  --persistent-antispam \
+  --log-level=info
+
+Restart=always
+RestartSec=5s
+
+# The log volume is the only thing this process should be able to write to.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/rekor
+
+[Install]
+WantedBy=multi-user.target
