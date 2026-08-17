@@ -17,6 +17,7 @@ Rekor v2 supports multiple storage backends. Separate binaries for each backend 
 * `rekor-server-gcp`: GCP-specific binary (includes only Google Cloud dependencies)
 * `rekor-server-aws`: AWS-specific binary (includes only AWS dependencies)
 * `rekor-server-posix`: POSIX-based storage (lightweight, no cloud dependencies)
+* `rekor-server-posix-azurekms`: POSIX-based storage with Azure Key Vault checkpoint signing
 * `rekor-server-gcpcloudsql`: Alternative to GCP binary that uses CloudSQL instead of Spanner
 
 ### Google Cloud Platform (GCP)
@@ -42,6 +43,88 @@ Rekor v2 supports multiple storage backends. Separate binaries for each backend 
 * Sequencing: Atomic POSIX operations
 * Tile storage: POSIX-compliant filesystem
 * Use case: Lower cost, easy to serve
+
+### POSIX + Azure Key Vault
+
+* Binary: `rekor-server-posix-azurekms`
+* Container `rekor-tiles/posix-azurekms`
+* Sequencing: Atomic POSIX operations
+* Tile storage: POSIX-compliant filesystem
+* Checkpoint signing: Azure Key Vault, or a private key file
+* Use case: POSIX storage where the checkpoint signing key should stay in Azure Key Vault
+
+This is the same storage backend as `rekor-server-posix` and is configured identically,
+including `--storage-dir`. It is shipped as a separate binary so that `rekor-server-posix`
+stays free of cloud SDK dependencies.
+
+Note that there is no Azure *storage* driver — Tessera provides drivers for GCS, S3,
+MySQL, and POSIX only, so tiles are still written to a filesystem.
+
+That filesystem must be genuinely POSIX-compliant. The driver relies on hard links,
+rename over an existing file, directory `fsync`, and `fcntl` record locks, so an ext4 or
+XFS volume on an Azure managed disk is suitable, while Azure Files over SMB (no hard
+links) and blobfuse2 (no hard links, no atomic rename) are not. Those fail during a
+write rather than at mount time, so a candidate directory should be probed for each of
+these guarantees before it is used to store a log.
+
+Since the POSIX driver writes tiles but does not serve them, a separate static file
+server publishes them, reading the tiles directly from the mounted filesystem.
+
+To sign checkpoints with a Key Vault key, pass its URI:
+
+```shell
+rekor-server-posix-azurekms serve \
+  --storage-dir=/var/lib/rekor \
+  --hostname=rekor.example.com \
+  --signer-kmskey=azurekms://[VAULT_NAME].vault.azure.net/[KEY_NAME]
+```
+
+A specific key version may be pinned by appending it:
+`azurekms://[VAULT_NAME].vault.azure.net/[KEY_NAME]/[KEY_VERSION]`.
+
+`--signer-kmskey` and `--signer-filepath` are mutually exclusive; exactly one must be set.
+
+To confirm the key is wired up correctly, check that the server logs `Loaded signing key`
+with a base64 DER public key matching
+`az keyvault key show --vault-name [VAULT_NAME] -n [KEY_NAME]`, then fetch a signed
+checkpoint, whose signature is produced by Key Vault:
+
+```shell
+curl -s http://localhost:3000/api/v2/checkpoint
+```
+
+Reading the public key and signing are separate Key Vault permissions, so a missing role
+assignment can surface at either step.
+
+There is deliberately no hash algorithm flag. Azure Key Vault determines the digest
+(SHA-256, SHA-384, or SHA-512) from the algorithm of the key itself, so a flag would have
+no effect. Tink is not supported for Azure, as there is no Tink Azure Key Vault
+integration.
+
+The identity used by the server needs the **Key Vault Crypto User** role on the key or
+vault, which grants the `sign` and `get` permissions required to sign checkpoints and read
+the public key. Authentication uses `DefaultAzureCredential`, so any of the standard
+mechanisms work, including a managed identity when running on Azure, or these environment
+variables:
+
+* `AZURE_TENANT_ID`
+* `AZURE_CLIENT_ID`
+* `AZURE_CLIENT_SECRET`
+
+#### Supported key types, and witnessing
+
+Azure Key Vault supports EC (P-256, P-384, P-521, P-256K) and RSA keys. It does not offer
+Ed25519, and Ed25519 is the only key type compatible with witnessing, so a log whose
+checkpoints are signed by a Key Vault key cannot be witnessed. Don't pass
+`--witness-policy-path` when signing with `--signer-kmskey`.
+
+If you need witnessing, sign with an Ed25519 key file via `--signer-filepath` instead.
+This constraint is a property of the signed-note format rather than of this binary, and
+applies equally to the gcp and aws backends when signing with a KMS key.
+
+Note that `--identity-mode` is unaffected: it constrains the algorithms accepted for
+*client entries*, not the checkpoint signing key, so it can be combined with Key Vault
+signing.
 
 ### GCP CloudSQL + Cloud Storage
 
