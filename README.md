@@ -113,10 +113,12 @@ variables:
 
 #### Supported key types, and witnessing
 
-Azure Key Vault supports EC (P-256, P-384, P-521, P-256K) and RSA keys. It does not offer
-Ed25519, and Ed25519 is the only key type compatible with witnessing, so a log whose
-checkpoints are signed by a Key Vault key cannot be witnessed. Don't pass
-`--witness-policy-path` when signing with `--signer-kmskey`.
+This binary supports EC P-256, P-384, and P-521 keys, and RSA-2048, RSA-3072, and
+RSA-4096 keys. Key Vault's other key types, notably P-256K (secp256k1), are rejected at
+server startup. Key Vault does not offer Ed25519, and Ed25519 is the only key type
+compatible with witnessing, so a log whose checkpoints are signed by a Key Vault key
+cannot be witnessed. Don't pass `--witness-policy-path` when signing with
+`--signer-kmskey`.
 
 If you need witnessing, sign with an Ed25519 key file via `--signer-filepath` instead.
 This constraint is a property of the signed-note format rather than of this binary, and
