@@ -14,11 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Shared configuration for the Azure Key Vault demo.
+# Shared configuration for the Azure Key Vault and managed-disk demo.
 # Source this file, or let the numbered scripts source it for you.
 
-# Vault names must be globally unique across Azure, so a suffix is generated
-# once and cached in .demo-env next to these scripts.
+# Vault and storage account names must be globally unique across Azure, so a
+# suffix is generated once and cached in .demo-env next to these scripts.
 DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${DEMO_DIR}/.demo-env"
 
@@ -34,27 +34,26 @@ fi
 
 export RESOURCE_GROUP="${RESOURCE_GROUP:-rekor-azure-demo}"
 export LOCATION="${LOCATION:-eastus}"
+
+# Key Vault signs the checkpoints.
 export VAULT_NAME="${VAULT_NAME:-rekor-demo-${DEMO_SUFFIX}}"
 export KEY_NAME="${KEY_NAME:-rekor-checkpoint-key}"
+export KMS_KEY_URI="azurekms://${VAULT_NAME}.vault.azure.net/${KEY_NAME}"
 
-# The log's origin string. This is baked into every checkpoint and into the
-# key hash, so the server and the verifier must agree on it.
+# The log's origin string is baked into every checkpoint and into the key hash,
+# so the server and verifier must agree on it.
 export REKOR_HOSTNAME="${REKOR_HOSTNAME:-rekor-azure-demo}"
 
+# The log lives on a local POSIX filesystem. On the deployment this demo models
+# that is an ext4 volume on an Azure managed disk; here it is whatever backs
+# /tmp, which 02-run-server.sh verifies with fscheck before starting.
 export STORAGE_DIR="${STORAGE_DIR:-/tmp/rekor-azure-demo/storage}"
 
-# The write path: the rekor server's own HTTP API.
+# The write path: the rekor server's own API, reachable only by submitters.
 export SERVER_URL="${SERVER_URL:-http://localhost:3000}"
 
-# The read path. With the POSIX driver the server writes tiles and checkpoints
-# to the filesystem and does not serve them itself, so a static file server
-# publishes STORAGE_DIR. The e2e suite does the same thing with nginx in
-# posix-compose.yml; this demo uses python3's http.server to keep it dependency
-# free.
 export TILES_URL="${TILES_URL:-http://localhost:8000}"
-export TILES_PORT="${TILES_PORT:-8000}"
 
-export KMS_KEY_URI="azurekms://${VAULT_NAME}.vault.azure.net/${KEY_NAME}"
 export PUBKEY_PEM="${PUBKEY_PEM:-${DEMO_DIR}/.demo-pubkey.pem}"
 
 # Repository root, so the scripts work regardless of where they're invoked from.

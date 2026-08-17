@@ -15,6 +15,10 @@
 # limitations under the License.
 #
 # Step 1: create the Azure infrastructure and build the server binary.
+#
+# Key Vault signs checkpoints. The log lives on a POSIX filesystem, which the
+# local walkthrough models with /tmp and vm/provision.sh implements with ext4
+# on an Azure managed disk.
 
 set -euo pipefail
 # shellcheck source=demo-env.sh
@@ -24,16 +28,17 @@ command -v az >/dev/null || fail "the Azure CLI (az) is required: https://learn.
 az account show >/dev/null 2>&1 || fail "not logged in to Azure; run 'az login' first"
 
 info "Using subscription: $(az account show --query name -o tsv)"
-note "resource group: ${RESOURCE_GROUP}"
-note "vault:          ${VAULT_NAME}"
-note "key:            ${KEY_NAME}"
+note "resource group:  ${RESOURCE_GROUP}"
+note "vault:           ${VAULT_NAME}"
 
 info "Creating resource group"
 az group create -n "${RESOURCE_GROUP}" -l "${LOCATION}" -o none
 
+################################################################################
+# The signing side: Key Vault.
+################################################################################
+
 info "Creating Key Vault (RBAC authorization)"
-# --enable-rbac-authorization uses Azure RBAC rather than legacy access policies,
-# which is what the "Key Vault Crypto User" role assignment below relies on.
 # Skipped when the vault already exists, so this script can be re-run after an
 # interruption without starting over.
 if az keyvault show -n "${VAULT_NAME}" -g "${RESOURCE_GROUP}" -o none 2>/dev/null; then
@@ -47,46 +52,52 @@ else
     -o none
 fi
 
-info "Granting this identity the Key Vault roles it needs"
-# Two roles, on purpose:
-#   Key Vault Crypto Officer -- lets THIS script create and download the key.
-#   Key Vault Crypto User    -- read the public key and sign. This is the only
-#                               role a production rekor identity needs; Officer
-#                               is a setup-time convenience for the demo.
-# Works for a user account; falls back to the service principal when running
-# as one (for example in CI).
+################################################################################
+# Roles. The demo identity needs to create the key and sign with it.
+################################################################################
+
+info "Granting this identity the roles it needs"
+# Key Vault Crypto Officer -- lets THIS script create and download the key.
+# Key Vault Crypto User    -- read the public key and sign. This is the only
+#                             vault role a production rekor identity needs.
+# On the VM deployment only Crypto User is attached to the VM's managed
+# identity, and nothing holds a credential on disk.
 PRINCIPAL_ID="$(az ad signed-in-user show --query id -o tsv 2>/dev/null || true)"
 if [[ -z "${PRINCIPAL_ID}" ]]; then
   PRINCIPAL_ID="$(az account show --query user.name -o tsv)"
 fi
 VAULT_SCOPE="$(az keyvault show -n "${VAULT_NAME}" --query id -o tsv)"
+
 ROLES_ADDED=0
-for role in "Key Vault Crypto Officer" "Key Vault Crypto User"; do
-  if [[ -n "$(az role assignment list --assignee "${PRINCIPAL_ID}" --scope "${VAULT_SCOPE}" \
+assign_role() {
+  local role="$1" scope="$2"
+  if [[ -n "$(az role assignment list --assignee "${PRINCIPAL_ID}" --scope "${scope}" \
       --role "${role}" --query "[0].id" -o tsv 2>/dev/null)" ]]; then
     note "already assigned: ${role}"
-    continue
+    return
   fi
   note "assigning: ${role}"
-  az role assignment create \
-    --role "${role}" \
-    --assignee "${PRINCIPAL_ID}" \
-    --scope "${VAULT_SCOPE}" \
-    -o none
+  az role assignment create --role "${role}" --assignee "${PRINCIPAL_ID}" --scope "${scope}" -o none
   ROLES_ADDED=1
-done
+}
+
+assign_role "Key Vault Crypto Officer" "${VAULT_SCOPE}"
+assign_role "Key Vault Crypto User" "${VAULT_SCOPE}"
 
 # Only wait when something actually changed.
 if [[ "${ROLES_ADDED}" == "1" ]]; then
-  note "RBAC changes take up to a minute to propagate; waiting before using the vault."
+  note "RBAC changes take up to a minute to propagate; waiting before using them."
   sleep 45
 fi
+
+################################################################################
+# The checkpoint signing key.
+################################################################################
 
 info "Creating the checkpoint signing key (EC P-256)"
 # Azure Key Vault offers EC and RSA keys, but NOT Ed25519. That's fine for
 # checkpoint signing, but it does mean this log cannot be witnessed --
-# Ed25519 is the only key type compatible with witnessing. See
-# pkg/note/note.go and the README section on this backend.
+# Ed25519 is the only key type compatible with witnessing. See pkg/note/note.go.
 #
 # Reused if it already exists: creating again would mint a new key version and
 # invalidate the public key downloaded by an earlier run.
@@ -115,5 +126,5 @@ info "Building rekor-server-posix-azurekms"
 make -C "${REPO_ROOT}" rekor-server-posix-azurekms
 
 info "Setup complete"
-note "Key URI: ${KMS_KEY_URI}"
-note "Next:    ./02-run-server.sh"
+note "Key URI:   ${KMS_KEY_URI}"
+note "Next:      ./02-run-server.sh"

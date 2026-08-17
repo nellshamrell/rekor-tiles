@@ -64,13 +64,13 @@ That filesystem must be genuinely POSIX-compliant. The driver relies on hard lin
 rename over an existing file, directory `fsync`, and `fcntl` record locks, so an ext4 or
 XFS volume on an Azure managed disk is suitable, while Azure Files over SMB (no hard
 links) and blobfuse2 (no hard links, no atomic rename) are not. Those fail during a
-write rather than at mount time. `demo/azure-blob-publish/fscheck` probes a candidate
+write rather than at mount time. `demo/azure-keyvault/fscheck` probes a candidate
 directory for each of these guarantees.
 
 Since the POSIX driver writes tiles but does not serve them, a separate static file
-server publishes them. `demo/azure-blob-publish` is a runnable example of the resulting
-deployment: the log on a POSIX filesystem, checkpoints signed by Key Vault, and tiles
-mirrored to Azure Blob Storage for clients to read.
+server publishes them. `demo/azure-keyvault` is a runnable example of the resulting
+deployment: the log on an Azure managed disk, checkpoints signed by Key Vault, and
+nginx serving tiles directly from the mounted filesystem.
 
 To sign checkpoints with a Key Vault key, pass its URI:
 

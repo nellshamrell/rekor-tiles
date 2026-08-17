@@ -49,7 +49,7 @@ import (
 
 func main() {
 	serverURL := flag.String("url", "http://localhost:3000", "rekor server base URL (the write path)")
-	tilesURL := flag.String("tiles-url", "http://localhost:8000", "base URL of the static file server publishing the POSIX storage directory (the read path)")
+	tilesURL := flag.String("tiles-url", "http://localhost:8000", "base URL of the static file server serving the POSIX storage directory")
 	pubKeyPath := flag.String("pubkey", "", "path to the log's public key in PEM form (required)")
 	origin := flag.String("origin", "rekor-azure-demo", "log origin, must match the server's --hostname")
 	submit := flag.Bool("submit", true, "submit a new entry before verifying")

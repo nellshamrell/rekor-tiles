@@ -14,10 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Step 2: run the server, signing checkpoints with the Key Vault key.
+# Step 2: run the server on a POSIX filesystem and serve it over local HTTP.
 #
-# Run this in its own terminal; it stays in the foreground so you can watch
-# the log. Then run ./03-demo.sh in a second terminal.
+# Run this in its own terminal; it stays in the foreground so you can watch the
+# log. Then run ./03-demo.sh in a second terminal.
+#
+# The production-shaped deployment in vm/ uses the same arrangement with an
+# Azure managed disk and nginx.
 
 set -euo pipefail
 # shellcheck source=demo-env.sh
@@ -27,25 +30,41 @@ source "$(dirname "${BASH_SOURCE[0]}")/demo-env.sh"
 
 mkdir -p "${STORAGE_DIR}"
 
-# With the POSIX driver the server writes tiles and checkpoints to disk but
-# doesn't serve them. Publish the storage directory so the demo client can read
-# checkpoints, the same role nginx plays in posix-compose.yml.
-info "Publishing ${STORAGE_DIR} on ${TILES_URL}"
-python3 -m http.server "${TILES_PORT}" --directory "${STORAGE_DIR}" >/dev/null 2>&1 &
-TILES_PID=$!
-trap 'kill "${TILES_PID}" 2>/dev/null || true' EXIT
+################################################################################
+info "Checking that ${STORAGE_DIR} can host a Tessera POSIX log"
+################################################################################
+# The POSIX driver needs more from a filesystem than the ability to write files:
+# hard links, rename over an existing file, directory fsync, and fcntl record
+# locks. Local disks provide all of it, and so does an ext4 volume on an Azure
+# managed disk -- which is exactly why the deployment in vm/ uses one. Azure
+# Files over SMB and blobfuse2 do not, and they fail during a write rather than
+# at mount time, so the check belongs here, before any data exists.
+go run "${REPO_ROOT}/demo/azure-keyvault/fscheck" --dir="${STORAGE_DIR}" \
+  || fail "${STORAGE_DIR} is not safe for a POSIX log; see the output above"
 
+################################################################################
+info "Starting the static file server"
+################################################################################
+python3 -m http.server 8000 --directory "${STORAGE_DIR}" >/dev/null 2>&1 &
+HTTP_PID=$!
+trap 'kill "${HTTP_PID}" 2>/dev/null || true' EXIT
+
+################################################################################
 info "Starting rekor-server-posix-azurekms"
-note "storage:  ${STORAGE_DIR}  (POSIX driver -- no Azure storage involved)"
-note "signer:   ${KMS_KEY_URI}"
-note "origin:   ${REKOR_HOSTNAME}"
+################################################################################
+note "storage:   ${STORAGE_DIR}  (local POSIX filesystem; models a managed disk)"
+note "signer:    ${KMS_KEY_URI}"
+note "origin:    ${REKOR_HOSTNAME}"
+note "write path: ${SERVER_URL}"
+note "read path:  ${TILES_URL}"
 echo
-note "Watch for 'Loaded signing key' -- that public key comes from Key Vault."
+note "Tiles remain on the POSIX filesystem. The HTTP server reads them directly;"
+note "there is no object-storage mirror."
 echo
 
-# Authentication uses DefaultAzureCredential, so an 'az login' session is
-# enough here. On an Azure VM or AKS this would pick up a managed identity
-# with no credentials on disk at all.
+# Authentication uses DefaultAzureCredential, so an 'az login' session is enough
+# here. On the VM deployment this picks up the machine's managed identity, and
+# no credential exists on disk.
 #
 # Note: no --witness-policy-path. Witnessing requires an Ed25519 key, which
 # Azure Key Vault does not offer.

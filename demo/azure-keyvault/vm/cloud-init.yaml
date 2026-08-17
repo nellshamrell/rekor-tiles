@@ -17,25 +17,19 @@
 # Provisions the disk-backed half of the deployment: an ext4 filesystem on an
 # Azure managed disk, mounted where the rekor server will keep the log.
 #
-# Substitute STORAGE_ACCOUNT and the two rekor flags before use. See
-# ../README.md for the az commands that create the VM, attach the disk, and
-# assign the managed identity its roles.
+# provision.sh creates the VM and disk, uploads the binary and unit, substitutes
+# the rekor flags, and starts the service.
 #
-# NOT exercised by the demo scripts. The demo runs the same binary against a
-# local filesystem; this file is the deployment those scripts model.
-#
-# This handles the disk and starts the units. It does NOT deliver the binary or
-# the unit files themselves -- bake those into the image, or have your config
-# management drop them at:
+# This handles the disk and the prerequisites. It does NOT deliver the server
+# binary or the unit files, and so does not start them; provision.sh does that
+# once they are on the machine:
 #
 #   /usr/local/bin/rekor-server-posix-azurekms
-#   /usr/local/bin/rekor-publish.sh          (mode 0755)
 #   /etc/systemd/system/rekor-server.service
-#   /etc/systemd/system/rekor-publish.service
-#   /etc/systemd/system/rekor-publish.timer
 
 package_update: true
 packages:
+  - nginx
   - parted
 
 write_files:
@@ -60,13 +54,13 @@ write_files:
       WantedBy=multi-user.target
 
 runcmd:
-  # The publisher shells out to the Azure CLI, which is not in the distro repos.
-  - curl -sL https://aka.ms/InstallAzureCLIDeb | bash
   # Partition and format only if the disk has no filesystem yet: this must be
   # safe to re-run, because cloud-init runs again if the VM is reimaged and
   # reformatting would destroy the log.
   - |
-    set -euo pipefail
+    # cloud-init runs runcmd under /bin/sh (dash on Ubuntu), which rejects
+    # `set -o pipefail` and would abort every command below.
+    set -eu
     disk=/dev/disk/azure/scsi1/lun0
     if ! blkid "${disk}-part1" >/dev/null 2>&1; then
       parted -s "$disk" mklabel gpt mkpart primary ext4 0% 100%
@@ -77,5 +71,22 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable --now var-lib-rekor.mount
   - install -d -o rekor -g rekor -m 0755 /var/lib/rekor/log
-  - systemctl enable --now rekor-server.service
-  - systemctl enable --now rekor-publish.timer
+  - |
+    cat >/etc/nginx/sites-available/rekor <<'EOF'
+    server {
+      listen 80 default_server;
+      server_name _;
+      root /var/lib/rekor/log;
+      location / { try_files $uri =404; }
+    }
+    EOF
+    rm -f /etc/nginx/sites-enabled/default
+    ln -sf /etc/nginx/sites-available/rekor /etc/nginx/sites-enabled/rekor
+    nginx -t
+    systemctl enable nginx
+    # nginx is already running with its default config from the packages
+    # module above, so `enable --now` would be a no-op and leave the site
+    # written here unloaded. Restart to pick it up.
+    systemctl restart nginx
+  # The units are deliberately not enabled here: this file does not deliver
+  # them or the server binary. provision.sh uploads both and then starts them.
